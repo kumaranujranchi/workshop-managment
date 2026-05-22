@@ -159,3 +159,160 @@ export function analyzeExpectations(expectationsList) {
     sampleCount: total
   };
 }
+
+/**
+ * Analyzes feedback comments for post-workshop qualitative insights.
+ * Returns themes, sentiment clusters, and improvement summary.
+ */
+export function analyzeFeedbackComments(feedbackList) {
+  const comments = (feedbackList || [])
+    .map(f => (typeof f.comments === 'string' ? f.comments.trim() : ''))
+    .filter(c => c.length > 0);
+
+  if (comments.length === 0) {
+    return {
+      sentiment: { positive: 0, curious: 0, concerned: 0, neutral: 0 },
+      themes: [],
+      improvements: [],
+      summary: 'No qualitative feedback submitted yet.',
+      sampleCount: 0
+    };
+  }
+
+  const IMPROVEMENT_PATTERNS = [
+    { theme: 'Add more hands-on labs', keywords: ['lab', 'hands-on', 'practice', 'exercise', 'interactive', 'practical'] },
+    { theme: 'Improve pacing / timing', keywords: ['rushed', 'slow', 'pacing', 'fast', 'time', 'quick', 'long'] },
+    { theme: 'More real-world examples', keywords: ['example', 'case study', 'real world', 'use case', 'application'] },
+    { theme: 'Deeper content coverage', keywords: ['deep', 'advanced', 'detailed', 'comprehensive', 'thorough', 'complex'] },
+    { theme: 'Better Q&A / discussion time', keywords: ['question', 'discussion', 'q&a', 'doubt', 'clarity', 'ask'] },
+    { theme: 'Improve facilitator delivery', keywords: ['facilitator', 'presenter', 'speaker', 'instructor', 'teaching'] },
+  ];
+
+  const FEEDBACK_THEME_PATTERNS = [
+    { name: 'Content Quality', keywords: ['content', 'material', 'curriculum', 'syllabus', 'topic', 'subject'] },
+    { name: 'Facilitator Effectiveness', keywords: ['facilitator', 'presenter', 'instructor', 'teaching', 'delivery', 'speaker'] },
+    { name: 'Hands-on / Practical', keywords: ['hands-on', 'lab', 'exercise', 'practice', 'practical', 'interactive', 'demo'] },
+    { name: 'Pacing & Time Management', keywords: ['pace', 'pacing', 'time', 'rushed', 'slow', 'duration', 'schedule'] },
+    { name: 'Learning Outcomes', keywords: ['learn', 'skill', 'knowledge', 'outcome', 'takeaway', 'insight', 'understand'] },
+    { name: 'Overall Experience', keywords: ['great', 'excellent', 'good', 'amazing', 'wonderful', 'helpful', 'useful', 'enjoyable'] },
+  ];
+
+  const sentimentCounts = { positive: 0, curious: 0, concerned: 0, neutral: 0 };
+  const themeCounts = {};
+  FEEDBACK_THEME_PATTERNS.forEach(t => { themeCounts[t.name] = 0; });
+  const improvementCounts = {};
+  IMPROVEMENT_PATTERNS.forEach(i => { improvementCounts[i.theme] = 0; });
+
+  comments.forEach(comment => {
+    const text = comment.toLowerCase();
+
+    let posCount = 0, curCount = 0, conCount = 0;
+    SENTIMENT_WORDS.positive.forEach(w => { if (text.includes(w)) posCount++; });
+    SENTIMENT_WORDS.curious.forEach(w => { if (text.includes(w)) curCount++; });
+    SENTIMENT_WORDS.concerned.forEach(w => { if (text.includes(w)) conCount++; });
+
+    if (posCount === 0 && curCount === 0 && conCount === 0) {
+      sentimentCounts.neutral++;
+    } else {
+      const max = Math.max(posCount, curCount, conCount);
+      if (max === posCount) sentimentCounts.positive++;
+      else if (max === curCount) sentimentCounts.curious++;
+      else sentimentCounts.concerned++;
+    }
+
+    FEEDBACK_THEME_PATTERNS.forEach(t => {
+      if (t.keywords.some(k => text.includes(k))) themeCounts[t.name]++;
+    });
+
+    IMPROVEMENT_PATTERNS.forEach(i => {
+      if (i.keywords.some(k => text.includes(k))) improvementCounts[i.theme]++;
+    });
+  });
+
+  const total = comments.length;
+  const sentiment = {
+    positive: Math.round((sentimentCounts.positive / total) * 100),
+    curious: Math.round((sentimentCounts.curious / total) * 100),
+    concerned: Math.round((sentimentCounts.concerned / total) * 100),
+    neutral: Math.round((sentimentCounts.neutral / total) * 100),
+  };
+
+  const themes = Object.entries(themeCounts)
+    .map(([name, count]) => ({ name, count, percentage: Math.round((count / total) * 100) }))
+    .filter(t => t.count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  const improvements = Object.entries(improvementCounts)
+    .map(([theme, count]) => ({ theme, count, percentage: Math.round((count / total) * 100) }))
+    .filter(i => i.count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  const dominantSentiment = Object.entries(sentimentCounts).sort((a, b) => b[1] - a[1])[0][0];
+  const topTheme = themes[0];
+  const topImprovement = improvements[0];
+
+  let summary = '';
+  if (dominantSentiment === 'positive') {
+    summary = `Overall feedback is highly positive${topTheme ? `, especially around "${topTheme.name}"` : ''}.`;
+  } else if (dominantSentiment === 'concerned') {
+    summary = `Feedback signals some concerns${topTheme ? ` in "${topTheme.name}"` : ''} — action is recommended.`;
+  } else if (dominantSentiment === 'curious') {
+    summary = `Participants express a desire to learn more and explore deeper topics.`;
+  } else {
+    summary = `Feedback is neutral${topTheme ? `, focusing mainly on "${topTheme.name}"` : ''}.`;
+  }
+
+  if (topImprovement) {
+    summary += ` Key improvement area: ${topImprovement.theme}.`;
+  }
+
+  return { sentiment, themes, improvements, summary, sampleCount: total };
+}
+
+/**
+ * Aggregates MCQ responses across all feedback submissions.
+ * mcqList: array of JSON-parsed MCQ objects { valuable: [], pacing: '', recommend: '' }
+ */
+export function aggregateMCQResponses(feedbackList) {
+  const valuableCounts = {};
+  const pacingCounts = { 'Too Fast': 0, 'Just Right': 0, 'Too Slow': 0 };
+  const recommendCounts = { 'Definitely Yes': 0, 'Probably Yes': 0, 'Probably Not': 0, 'Definitely Not': 0 };
+  let totalMCQ = 0;
+
+  feedbackList.forEach(f => {
+    if (!f.mcqResponses) return;
+    try {
+      const mcq = typeof f.mcqResponses === 'string' ? JSON.parse(f.mcqResponses) : f.mcqResponses;
+      totalMCQ++;
+
+      if (Array.isArray(mcq.valuable)) {
+        mcq.valuable.forEach(v => {
+          valuableCounts[v] = (valuableCounts[v] || 0) + 1;
+        });
+      }
+      if (mcq.pacing && pacingCounts[mcq.pacing] !== undefined) {
+        pacingCounts[mcq.pacing]++;
+      }
+      if (mcq.recommend && recommendCounts[mcq.recommend] !== undefined) {
+        recommendCounts[mcq.recommend]++;
+      }
+    } catch (e) {
+      // Invalid JSON, skip
+    }
+  });
+
+  const valuableArray = Object.entries(valuableCounts)
+    .map(([label, count]) => ({ label, count, percentage: totalMCQ > 0 ? Math.round((count / totalMCQ) * 100) : 0 }))
+    .sort((a, b) => b.count - a.count);
+
+  const recommendScore = totalMCQ > 0
+    ? Math.round(
+        ((recommendCounts['Definitely Yes'] * 100 + recommendCounts['Probably Yes'] * 75 +
+          recommendCounts['Probably Not'] * 25 + recommendCounts['Definitely Not'] * 0) /
+          (totalMCQ * 100)) * 100
+      )
+    : 0;
+
+  return { valuableArray, pacingCounts, recommendCounts, recommendScore, totalMCQ };
+}
+

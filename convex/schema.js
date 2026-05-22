@@ -33,6 +33,7 @@ export default defineSchema({
     participantId: v.string(),
     rating: v.number(),
     comments: v.optional(v.string()),
+    mcqResponses: v.optional(v.string()), // JSON stringified MCQ answers
     createdAt: v.optional(v.number()),
   }).index("by_workshopId", ["workshopId"]),
 

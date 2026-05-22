@@ -32,6 +32,7 @@ export const create = mutation({
     participantId: v.string(),
     rating: v.number(),
     comments: v.optional(v.string()),
+    mcqResponses: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (args.rating < 1 || args.rating > 5) {
@@ -54,6 +55,7 @@ export const create = mutation({
       participantId: args.participantId,
       rating: args.rating,
       comments: args.comments,
+      mcqResponses: args.mcqResponses || null,
       createdAt: Date.now(),
     });
 

@@ -39,6 +39,13 @@ try {
   // Ignored if column already exists
 }
 
+// Run feedback table alterations
+try {
+  rawDb.exec("ALTER TABLE feedback ADD COLUMN mcqResponses TEXT;");
+} catch (err) {
+  // Ignored if column already exists
+}
+
 // Recreate participants to support 'waitlisted' check constraint
 let needsParticipantsRecreate = false;
 try {
@@ -98,6 +105,7 @@ rawDb.exec(`
     participantId TEXT NOT NULL,
     rating INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 5),
     comments TEXT,
+    mcqResponses TEXT,
     createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(workshopId) REFERENCES workshops(id),
     FOREIGN KEY(participantId) REFERENCES participants(id)

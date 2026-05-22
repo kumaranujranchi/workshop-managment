@@ -7,10 +7,35 @@ function generateId() {
   return Math.random().toString(36).substring(2, 9);
 }
 
+export async function GET(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const workshopId = searchParams.get('workshopId');
+
+    if (isConvexEnabled) {
+      const feedbackList = await convex.query(api.feedback.list, {
+        workshopId: workshopId || undefined,
+      });
+      return NextResponse.json(feedbackList);
+    }
+
+    let feedbackList;
+    if (workshopId) {
+      feedbackList = db.prepare('SELECT * FROM feedback WHERE workshopId = ? ORDER BY createdAt DESC').all(workshopId);
+    } else {
+      feedbackList = db.prepare('SELECT * FROM feedback ORDER BY createdAt DESC').all();
+    }
+    return NextResponse.json(feedbackList);
+  } catch (error) {
+    console.error('Error fetching feedback:', error);
+    return NextResponse.json({ error: 'Failed to fetch feedback' }, { status: 500 });
+  }
+}
+
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { workshopId, participantId, rating, comments } = body;
+    const { workshopId, participantId, rating, comments, mcqResponses } = body;
 
     if (!workshopId || !participantId || rating === undefined) {
       return NextResponse.json({ error: 'workshopId, participantId, and rating are required' }, { status: 400 });
@@ -20,6 +45,8 @@ export async function POST(request) {
     if (isNaN(ratingVal) || ratingVal < 1 || ratingVal > 5) {
       return NextResponse.json({ error: 'Rating must be an integer between 1 and 5' }, { status: 400 });
     }
+
+    const mcqJson = mcqResponses ? JSON.stringify(mcqResponses) : null;
 
     if (isConvexEnabled) {
       // Verify participant exists and belongs to this workshop
@@ -41,6 +68,7 @@ export async function POST(request) {
         participantId,
         rating: ratingVal,
         comments: comments || '',
+        mcqResponses: mcqJson,
       });
       return NextResponse.json(newFeedback, { status: 201 });
     }
@@ -59,9 +87,9 @@ export async function POST(request) {
 
     const id = generateId();
     db.prepare(`
-      INSERT INTO feedback (id, workshopId, participantId, rating, comments)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, workshopId, participantId, ratingVal, comments || '');
+      INSERT INTO feedback (id, workshopId, participantId, rating, comments, mcqResponses)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, workshopId, participantId, ratingVal, comments || '', mcqJson);
 
     const newFeedback = db.prepare('SELECT * FROM feedback WHERE id = ?').get(id);
     return NextResponse.json(newFeedback, { status: 201 });

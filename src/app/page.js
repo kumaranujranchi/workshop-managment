@@ -32,7 +32,8 @@ import {
 } from 'lucide-react';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
-import { analyzeExpectations } from '@/lib/nlp.js';
+import { analyzeExpectations, analyzeFeedbackComments, aggregateMCQResponses } from '@/lib/nlp.js';
+import { BarChart2, TrendingUp, ThumbsUp, MessageSquare } from 'lucide-react';
 
 const isConvexEnabled = !!process.env.NEXT_PUBLIC_CONVEX_URL;
 
@@ -72,6 +73,8 @@ function HomeConvex({
   const recommendations = useQuery(api.agent.listRecommendations) || [];
   const participants = useQuery(api.participants.list, selectedWorkshopId ? { workshopId: selectedWorkshopId } : {}) || [];
   const notifications = useQuery(api.participants.listNotifications) || [];
+  const feedbackList = useQuery(api.feedback.list, selectedWorkshopId ? { workshopId: selectedWorkshopId } : {}) || [];
+  const allFeedback = useQuery(api.feedback.list) || [];
 
   // Auto-select first workshop if none selected
   useEffect(() => {
@@ -163,8 +166,8 @@ function HomeConvex({
     return await updatePart({ id: participantId, onboardingStatus: 'completed' });
   };
 
-  const handleSubmitFeedback = async (workshopId, participantId, rating, comments) => {
-    return await createFeedback({ workshopId, participantId, rating, comments });
+  const handleSubmitFeedback = async (workshopId, participantId, rating, comments, mcqResponses) => {
+    return await createFeedback({ workshopId, participantId, rating, comments, mcqResponses: mcqResponses ? JSON.stringify(mcqResponses) : undefined });
   };
 
   return (
@@ -175,6 +178,8 @@ function HomeConvex({
       recommendations={recommendations}
       participants={participants}
       notifications={notifications}
+      feedbackList={feedbackList}
+      allFeedback={allFeedback}
       selectedWorkshopId={selectedWorkshopId}
       setSelectedWorkshopId={setSelectedWorkshopId}
       selectedParticipantId={selectedParticipantId}
@@ -208,6 +213,8 @@ function HomeREST({
   const [recommendations, setRecommendations] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [feedbackList, setFeedbackList] = useState([]);
+  const [allFeedback, setAllFeedback] = useState([]);
 
   // Fetch initial data
   const fetchData = async () => {
@@ -230,6 +237,10 @@ function HomeREST({
       const nRes = await fetch('/api/notifications');
       const nData = await nRes.json();
       setNotifications(nData);
+
+      const fbRes = await fetch('/api/feedback');
+      const fbData = await fbRes.json();
+      setAllFeedback(fbData);
     } catch (err) {
       console.error('Error fetching data:', err);
     }
@@ -254,6 +265,10 @@ function HomeREST({
             setSelectedParticipantId('');
           }
         });
+      // Also fetch feedback for selected workshop
+      fetch(`/api/feedback?workshopId=${selectedWorkshopId}`)
+        .then(res => res.json())
+        .then(data => setFeedbackList(data));
     } else {
       setParticipants([]);
       setSelectedParticipantId('');
@@ -459,11 +474,11 @@ function HomeREST({
     return data;
   };
 
-  const handleSubmitFeedback = async (workshopId, participantId, rating, comments) => {
+  const handleSubmitFeedback = async (workshopId, participantId, rating, comments, mcqResponses) => {
     const res = await fetch('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workshopId, participantId, rating: Number(rating), comments })
+      body: JSON.stringify({ workshopId, participantId, rating: Number(rating), comments, mcqResponses })
     });
     if (!res.ok) {
       const err = await res.json();
@@ -482,6 +497,8 @@ function HomeREST({
       recommendations={recommendations}
       participants={participants}
       notifications={notifications}
+      feedbackList={feedbackList}
+      allFeedback={allFeedback}
       selectedWorkshopId={selectedWorkshopId}
       setSelectedWorkshopId={setSelectedWorkshopId}
       selectedParticipantId={selectedParticipantId}
@@ -528,7 +545,9 @@ function Dashboard({
   onRegisterParticipant,
   onAttendance,
   onOnboarding,
-  onSubmitFeedback
+  onSubmitFeedback,
+  feedbackList = [],
+  allFeedback = []
 }) {
   // Navigation & Role states
   const [activeRole, setActiveRole] = useState('admin'); // 'admin', 'facilitator', 'participant'
@@ -572,6 +591,11 @@ function Dashboard({
 
   // Status message
   const [alertMsg, setAlertMsg] = useState({ text: '', type: '' });
+
+  // MCQ feedback state
+  const [mcqValuable, setMcqValuable] = useState([]);
+  const [mcqPacing, setMcqPacing] = useState('');
+  const [mcqRecommend, setMcqRecommend] = useState('');
 
   // Auto-select facilitator inside Add Workshop modal if not set
   useEffect(() => {
@@ -771,11 +795,18 @@ function Dashboard({
       showAlert('Please select participant first', 'error');
       return;
     }
-
+    const mcqResponses = {
+      valuable: mcqValuable,
+      pacing: mcqPacing,
+      recommend: mcqRecommend,
+    };
     try {
-      await onSubmitFeedback(selectedWorkshopId, selectedParticipantId, feedbackRating, feedbackComments);
+      await onSubmitFeedback(selectedWorkshopId, selectedParticipantId, feedbackRating, feedbackComments, mcqResponses);
       showAlert('Feedback submitted successfully. Thank you!');
       setFeedbackComments('');
+      setMcqValuable([]);
+      setMcqPacing('');
+      setMcqRecommend('');
     } catch (err) {
       showAlert(err.message || 'Failed to submit feedback', 'error');
     }
@@ -896,6 +927,12 @@ function Dashboard({
                   onClick={() => setAdminTab('sandbox')}
                 >
                   System Integrations & Sandbox
+                </button>
+                <button 
+                  className={`tab-btn ${adminTab === 'analytics' ? 'active' : ''}`}
+                  onClick={() => setAdminTab('analytics')}
+                >
+                  📊 Post-Workshop Analytics
                 </button>
               </div>
 
@@ -1285,6 +1322,220 @@ function Dashboard({
                   </div>
                 </div>
               )}
+
+              {/* ── Analytics Tab ── */}
+              {adminTab === 'analytics' && (() => {
+                const completedWS = workshops.filter(w => w.status === 'completed');
+                const totalParticipants = workshops.reduce((acc, w) => {
+                  return acc + (allFeedback ? 0 : 0); // use participant count
+                }, 0);
+                const allRatings = allFeedback.map(f => f.rating).filter(Boolean);
+                const avgRating = allRatings.length > 0 ? (allRatings.reduce((a, b) => a + b, 0) / allRatings.length).toFixed(1) : 'N/A';
+                const fbNLP = analyzeFeedbackComments(allFeedback);
+                const mcqAgg = aggregateMCQResponses(allFeedback);
+
+                const ratingDist = [1,2,3,4,5].map(r => ({
+                  star: r,
+                  count: allRatings.filter(x => x === r).length,
+                  pct: allRatings.length > 0 ? Math.round((allRatings.filter(x => x === r).length / allRatings.length) * 100) : 0
+                }));
+
+                // Per-workshop avg ratings for bar chart
+                const workshopRatings = workshops.map(w => {
+                  const wFb = allFeedback.filter(f => f.workshopId === w.id || f.workshopId === w._id);
+                  const avg = wFb.length > 0 ? (wFb.reduce((a, f) => a + f.rating, 0) / wFb.length) : null;
+                  return { title: w.title, avg, count: wFb.length };
+                }).filter(w => w.count > 0);
+
+                const sentimentColors = { positive: '#34d399', curious: '#60a5fa', concerned: '#f87171', neutral: '#9ca3af' };
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    {/* Summary KPI cards */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+                      {[
+                        { icon: <BarChart2 size={20} />, label: 'Total Workshops', value: workshops.length, color: 'hsl(var(--primary))' },
+                        { icon: <CheckSquare size={20} />, label: 'Completed', value: completedWS.length, color: '#34d399' },
+                        { icon: <MessageSquare size={20} />, label: 'Feedback Received', value: allFeedback.length, color: '#60a5fa' },
+                        { icon: <ThumbsUp size={20} />, label: 'Avg Rating', value: avgRating ? `${avgRating} / 5` : 'N/A', color: '#fbbf24' },
+                      ].map((kpi, i) => (
+                        <div key={i} className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '8px', borderTop: `3px solid ${kpi.color}` }}>
+                          <span style={{ color: kpi.color }}>{kpi.icon}</span>
+                          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'hsl(var(--foreground))' }}>{kpi.value}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))' }}>{kpi.label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Rating distribution */}
+                    {allFeedback.length > 0 && (
+                      <div className="card" style={{ padding: '24px' }}>
+                        <h4 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <TrendingUp size={16} style={{ color: 'hsl(var(--primary))' }} /> Rating Distribution
+                        </h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          {ratingDist.slice().reverse().map(r => (
+                            <div key={r.star} style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <span style={{ width: '40px', fontSize: '0.85rem', color: 'hsl(var(--muted))' }}>{'★'.repeat(r.star)}</span>
+                              <div style={{ flex: 1, background: 'rgba(255,255,255,0.05)', borderRadius: '6px', height: '12px', overflow: 'hidden' }}>
+                                <div style={{ width: `${r.pct}%`, height: '100%', background: r.star >= 4 ? '#34d399' : r.star === 3 ? '#fbbf24' : '#f87171', borderRadius: '6px', transition: 'width 0.6s ease' }} />
+                              </div>
+                              <span style={{ width: '50px', fontSize: '0.8rem', color: 'hsl(var(--muted))' }}>{r.pct}% ({r.count})</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Per-Workshop ratings bar chart */}
+                    {workshopRatings.length > 0 && (
+                      <div className="card" style={{ padding: '24px' }}>
+                        <h4 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <BarChart2 size={16} style={{ color: 'hsl(var(--primary))' }} /> Avg Rating per Workshop
+                        </h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {workshopRatings.map((w, i) => (
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <span style={{ width: '140px', fontSize: '0.78rem', color: 'hsl(var(--muted))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={w.title}>{w.title}</span>
+                              <div style={{ flex: 1, background: 'rgba(255,255,255,0.05)', borderRadius: '6px', height: '14px', overflow: 'hidden' }}>
+                                <div style={{ width: `${(w.avg / 5) * 100}%`, height: '100%', background: 'linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)))', borderRadius: '6px', transition: 'width 0.6s ease' }} />
+                              </div>
+                              <span style={{ width: '70px', fontSize: '0.8rem', color: 'hsl(var(--foreground))' }}>{w.avg.toFixed(1)} / 5 ({w.count})</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Feedback NLP Analysis */}
+                    {allFeedback.length > 0 && (
+                      <div className="card" style={{ padding: '24px' }}>
+                        <h4 style={{ marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Sparkles size={16} style={{ color: 'hsl(var(--primary))' }} /> Qualitative Feedback Intelligence
+                        </h4>
+                        <p style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))', marginBottom: '20px' }}>NLP analysis across {fbNLP.sampleCount} feedback comment(s)</p>
+
+                        {/* AI Summary */}
+                        <div style={{ padding: '14px', borderRadius: 'var(--radius-md)', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', marginBottom: '20px', fontSize: '0.88rem', lineHeight: '1.6', color: 'hsl(var(--foreground) / 0.9)' }}>
+                          💡 {fbNLP.summary}
+                        </div>
+
+                        {/* Sentiment Bar */}
+                        {fbNLP.sampleCount > 0 && (
+                          <div style={{ marginBottom: '20px' }}>
+                            <div style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))', marginBottom: '8px' }}>Comment Sentiment Cluster</div>
+                            <div style={{ display: 'flex', height: '16px', borderRadius: '8px', overflow: 'hidden', gap: '2px' }}>
+                              {Object.entries(fbNLP.sentiment).filter(([,v]) => v > 0).map(([k, v]) => (
+                                <div key={k} style={{ width: `${v}%`, background: sentimentColors[k], title: `${k}: ${v}%` }} title={`${k}: ${v}%`} />
+                              ))}
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', marginTop: '6px', flexWrap: 'wrap' }}>
+                              {Object.entries(fbNLP.sentiment).map(([k, v]) => (
+                                <span key={k} style={{ fontSize: '0.72rem', color: 'hsl(var(--muted))' }}>
+                                  <span style={{ color: sentimentColors[k], marginRight: '3px' }}>●</span>{k}: {v}%
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Feedback Themes */}
+                        {fbNLP.themes.length > 0 && (
+                          <div style={{ marginBottom: '20px' }}>
+                            <div style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))', marginBottom: '10px' }}>Feedback Themes</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                              {fbNLP.themes.map((t, i) => (
+                                <span key={i} style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '0.78rem', fontWeight: 600, background: `rgba(139, 92, 246, ${0.08 + i * 0.03})`, border: '1px solid rgba(139, 92, 246, 0.25)', color: 'hsl(var(--primary))' }}>
+                                  {t.name} {t.percentage}%
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Improvement Areas */}
+                        {fbNLP.improvements.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))', marginBottom: '10px' }}>🎯 AI-Identified Improvement Areas</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              {fbNLP.improvements.slice(0, 4).map((imp, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                  <span style={{ fontSize: '0.82rem', color: 'hsl(var(--foreground) / 0.85)', flex: 1 }}>{imp.theme}</span>
+                                  <div style={{ width: '100px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', height: '8px', overflow: 'hidden' }}>
+                                    <div style={{ width: `${imp.percentage}%`, height: '100%', background: '#f87171', borderRadius: '6px' }} />
+                                  </div>
+                                  <span style={{ fontSize: '0.75rem', color: '#f87171', width: '30px' }}>{imp.percentage}%</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* MCQ Aggregate Results */}
+                    {mcqAgg.totalMCQ > 0 && (
+                      <div className="card" style={{ padding: '24px' }}>
+                        <h4 style={{ marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <CheckSquare size={16} style={{ color: 'hsl(var(--primary))' }} /> MCQ Feedback Aggregates
+                        </h4>
+                        <p style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))', marginBottom: '20px' }}>Based on {mcqAgg.totalMCQ} structured responses</p>
+
+                        {/* Would Recommend Score */}
+                        <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '20px' }}>
+                          <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: `conic-gradient(hsl(var(--primary)) ${mcqAgg.recommendScore * 3.6}deg, rgba(255,255,255,0.05) 0)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: 'hsl(var(--card))', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
+                              <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'hsl(var(--primary))' }}>{mcqAgg.recommendScore}%</span>
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '4px' }}>Recommend Score</div>
+                            <div style={{ fontSize: '0.78rem', color: 'hsl(var(--muted))' }}>Weighted likelihood participants would recommend this to peers</div>
+                          </div>
+                        </div>
+
+                        {/* Pacing responses */}
+                        <div style={{ marginBottom: '16px' }}>
+                          <div style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))', marginBottom: '8px' }}>Workshop Pacing</div>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {Object.entries(mcqAgg.pacingCounts).map(([label, count]) => (
+                              <span key={label} style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '0.78rem', background: 'rgba(255,255,255,0.04)', border: '1px solid hsl(var(--card-border))' }}>
+                                {label}: <strong>{count}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Most Valuable Aspects */}
+                        {mcqAgg.valuableArray.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))', marginBottom: '8px' }}>Most Valuable Aspects</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              {mcqAgg.valuableArray.map((v, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                  <span style={{ fontSize: '0.82rem', flex: 1, color: 'hsl(var(--foreground) / 0.85)' }}>{v.label}</span>
+                                  <div style={{ width: '80px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', height: '8px', overflow: 'hidden' }}>
+                                    <div style={{ width: `${v.percentage}%`, height: '100%', background: 'hsl(var(--primary))', borderRadius: '4px' }} />
+                                  </div>
+                                  <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', width: '35px' }}>{v.percentage}%</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {allFeedback.length === 0 && (
+                      <div className="card" style={{ padding: '60px', textAlign: 'center' }}>
+                        <BarChart2 size={40} style={{ color: 'hsl(var(--muted))', margin: '0 auto 16px' }} />
+                        <p style={{ color: 'hsl(var(--muted))', fontSize: '0.9rem' }}>No post-workshop feedback data yet.</p>
+                        <p style={{ color: 'hsl(var(--muted) / 0.6)', fontSize: '0.8rem', marginTop: '8px' }}>Analytics will populate once participants submit feedback for completed workshops.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Right Column: Agentic AI Recommendations */}
@@ -1758,59 +2009,103 @@ function Dashboard({
                     })()}
                   </div>
 
-                  {/* Feedback & Satisfaction Reports */}
-                  <div className="card">
-                    <h3 style={{ fontSize: '1.2rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <FileText size={18} style={{ color: 'hsl(var(--accent))' }} /> Post-Workshop Feedback Reports
-                    </h3>
+                   {/* Feedback & Satisfaction Reports */}
+                   <div className="card">
+                     <h3 style={{ fontSize: '1.2rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                       <FileText size={18} style={{ color: 'hsl(var(--accent))' }} /> Post-Workshop Feedback Reports
+                     </h3>
 
-                    {(() => {
-                      const ws = workshops.find(w => w.id === selectedWorkshopId);
-                      if (!ws || !ws.feedbackCount) {
-                        return (
-                          <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--muted))' }}>
-                            No feedback reviews submitted yet. Feedback reports compile when the workshop is completed.
-                          </div>
-                        );
-                      }
+                     {(() => {
+                       const ws = workshops.find(w => w.id === selectedWorkshopId);
+                       const wsFeedback = feedbackList.filter(f => f.workshopId === selectedWorkshopId);
+                       if (!wsFeedback || wsFeedback.length === 0) {
+                         return (
+                           <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--muted))' }}>
+                             No feedback reviews submitted yet. Feedback reports compile when the workshop is completed.
+                           </div>
+                         );
+                       }
 
-                      return (
-                        <div>
-                          {/* Summary Scorecard */}
-                          <div className="glass" style={{ padding: '16px', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-around', alignItems: 'center', marginBottom: '20px' }}>
-                            <div style={{ textAlign: 'center' }}>
-                              <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Average Rating</span>
-                              <h4 style={{ fontSize: '2rem', fontWeight: 700, color: 'hsl(var(--success))' }}>{Number(ws.avgRating).toFixed(1)}/5.0</h4>
-                            </div>
-                            <div style={{ width: '1px', height: '40px', background: 'hsl(var(--card-border))' }} />
-                            <div style={{ textAlign: 'center' }}>
-                              <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reviews Submitted</span>
-                              <h4 style={{ fontSize: '2rem', fontWeight: 700, color: 'hsl(var(--foreground))' }}>{ws.feedbackCount}</h4>
-                            </div>
-                          </div>
+                       const ratings = wsFeedback.map(f => f.rating).filter(Boolean);
+                       const avg = ratings.length > 0 ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1) : 'N/A';
+                       
+                       // Run Qualitative NLP Analysis specifically for this workshop
+                       const nlp = analyzeFeedbackComments(wsFeedback);
+                       const sentimentColors = { positive: '#34d399', curious: '#60a5fa', concerned: '#f87171', neutral: '#9ca3af' };
 
-                          {/* Feedback reviews notice */}
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'hsl(var(--foreground) / 0.8)' }}>Recent Participant Reviews:</span>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '150px', overflowY: 'auto' }}>
-                              <div style={{ padding: '10px', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.01)', border: '1px solid hsl(var(--card-border))', fontSize: '0.8rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                  <span style={{ fontWeight: 600, color: 'hsl(var(--primary))' }}>Participant Rating: 4/5</span>
-                                </div>
-                                <p style={{ color: 'hsl(var(--foreground) / 0.9)' }}>"The material was deep and very helpful. Could use some more hands-on labs, but overall great!"</p>
-                              </div>
-                              <div style={{ padding: '10px', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.01)', border: '1px solid hsl(var(--card-border))', fontSize: '0.8rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                  <span style={{ fontWeight: 600, color: 'hsl(var(--primary))' }}>Participant Rating: 5/5</span>
-                                </div>
-                                <p style={{ color: 'hsl(var(--foreground) / 0.9)' }}>"Superb orchestration, the Agentic AI recommendations panel demo was excellent."</p>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
+                       return (
+                         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                           {/* Summary Scorecard */}
+                           <div className="glass" style={{ padding: '16px', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
+                             <div style={{ textAlign: 'center' }}>
+                               <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Average Rating</span>
+                               <h4 style={{ fontSize: '2rem', fontWeight: 700, color: 'hsl(var(--success))' }}>{avg}/5.0</h4>
+                             </div>
+                             <div style={{ width: '1px', height: '40px', background: 'hsl(var(--card-border))' }} />
+                             <div style={{ textAlign: 'center' }}>
+                               <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reviews Submitted</span>
+                               <h4 style={{ fontSize: '2rem', fontWeight: 700, color: 'hsl(var(--foreground))' }}>{wsFeedback.length}</h4>
+                             </div>
+                           </div>
+
+                           {/* NLP Insight Card */}
+                           <div style={{ padding: '14px', borderRadius: 'var(--radius-md)', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', fontSize: '0.85rem' }}>
+                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', fontWeight: 600, color: 'hsl(var(--primary))' }}>
+                               <Sparkles size={14} /> AI Qualitative Sentiment Summary
+                             </div>
+                             <p style={{ margin: 0, fontStyle: 'italic', color: 'hsl(var(--foreground) / 0.9)' }}>"{nlp.summary}"</p>
+                             
+                             {/* Sentiment bar */}
+                             <div style={{ display: 'flex', height: '8px', borderRadius: '4px', overflow: 'hidden', marginTop: '12px', gap: '1px' }}>
+                               {Object.entries(nlp.sentiment).filter(([,v]) => v > 0).map(([k, v]) => (
+                                 <div key={k} style={{ width: `${v}%`, background: sentimentColors[k] }} title={`${k}: ${v}%`} />
+                               ))}
+                             </div>
+                             <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap', fontSize: '0.7rem' }}>
+                               {Object.entries(nlp.sentiment).filter(([,v]) => v > 0).map(([k, v]) => (
+                                 <span key={k} style={{ color: 'hsl(var(--muted))' }}>
+                                   <span style={{ color: sentimentColors[k], marginRight: '2px' }}>●</span>{k} {v}%
+                                 </span>
+                               ))}
+                             </div>
+                           </div>
+
+                           {/* Recent comments */}
+                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                             <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'hsl(var(--foreground) / 0.8)' }}>Recent Participant Reviews:</span>
+                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                               {wsFeedback.map((f, i) => {
+                                 let parsedMCQ = null;
+                                 if (f.mcqResponses) {
+                                   try {
+                                     parsedMCQ = typeof f.mcqResponses === 'string' ? JSON.parse(f.mcqResponses) : f.mcqResponses;
+                                   } catch (e) {}
+                                 }
+                                 return (
+                                   <div key={f.id || i} style={{ padding: '10px', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.01)', border: '1px solid hsl(var(--card-border))', fontSize: '0.8rem' }}>
+                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                       <span style={{ fontWeight: 600, color: 'hsl(var(--primary))' }}>Rating: {f.rating}/5 Stars</span>
+                                       {parsedMCQ?.pacing && (
+                                         <span style={{ fontSize: '0.72rem', color: 'hsl(var(--muted))' }}>Pacing: {parsedMCQ.pacing.replace('_', ' ')}</span>
+                                       )}
+                                     </div>
+                                     <p style={{ color: 'hsl(var(--foreground) / 0.9)', margin: '0 0 6px 0' }}>"{f.comments}"</p>
+                                     {parsedMCQ?.valuable && parsedMCQ.valuable.length > 0 && (
+                                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
+                                         {parsedMCQ.valuable.map((val, vi) => (
+                                           <span key={vi} style={{ fontSize: '0.65rem', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '10px', color: 'hsl(var(--muted))' }}>{val}</span>
+                                         ))}
+                                       </div>
+                                     )}
+                                   </div>
+                                 );
+                               })}
+                             </div>
+                           </div>
+                         </div>
+                       );
+                     })()}
+                   </div>
                 </div>
               </div>
             ) : (
@@ -1951,40 +2246,120 @@ function Dashboard({
                           </div>
                         </div>
 
-                        {/* Feedback Submission Section */}
-                        <div className="glass" style={{ padding: '16px', borderRadius: 'var(--radius-md)' }}>
-                          <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', display: 'block', marginBottom: '12px' }}>Submit Post-Workshop Feedback</span>
-                          <form onSubmit={handleSubmitFeedback}>
-                            <div className="form-group" style={{ marginBottom: '12px' }}>
-                              <label className="form-label">Rating</label>
-                              <select 
-                                className="form-input"
-                                value={feedbackRating}
-                                onChange={(e) => setFeedbackRating(e.target.value)}
-                              >
-                                <option value="5">5 Stars - Outstanding</option>
-                                <option value="4">4 Stars - Very Good</option>
-                                <option value="3">3 Stars - Good</option>
-                                <option value="2">2 Stars - Satisfactory</option>
-                                <option value="1">1 Star - Unsatisfactory</option>
-                              </select>
-                            </div>
-                            <div className="form-group" style={{ marginBottom: '12px' }}>
-                              <label className="form-label">Comments</label>
-                              <textarea 
-                                className="form-input"
-                                style={{ minHeight: '60px', resize: 'vertical' }}
-                                placeholder="What did you learn? How can we improve this cohort?"
-                                value={feedbackComments}
-                                onChange={(e) => setFeedbackComments(e.target.value)}
-                                required
-                              />
-                            </div>
-                            <button type="submit" className="btn btn-accent" style={{ width: '100%' }}>
-                              Submit Feedback
-                            </button>
-                          </form>
-                        </div>
+                         {/* Feedback Submission Section */}
+                         <div className="glass" style={{ padding: '16px', borderRadius: 'var(--radius-md)' }}>
+                           <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', display: 'block', marginBottom: '12px' }}>Submit Post-Workshop Feedback</span>
+                           <form onSubmit={handleSubmitFeedback}>
+                             <div className="form-group" style={{ marginBottom: '12px' }}>
+                               <label className="form-label">Rating</label>
+                               <select 
+                                 className="form-input"
+                                 value={feedbackRating}
+                                 onChange={(e) => setFeedbackRating(e.target.value)}
+                               >
+                                 <option value="5">5 Stars - Outstanding</option>
+                                 <option value="4">4 Stars - Very Good</option>
+                                 <option value="3">3 Stars - Good</option>
+                                 <option value="2">2 Stars - Satisfactory</option>
+                                 <option value="1">1 Star - Unsatisfactory</option>
+                               </select>
+                             </div>
+
+                             {/* MCQ: Valuable Aspects */}
+                             <div className="form-group" style={{ marginBottom: '12px' }}>
+                               <label className="form-label" style={{ display: 'block', marginBottom: '6px' }}>What was most valuable? (Select all that apply)</label>
+                               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                 {[
+                                   "Hands-on coding / live exercises",
+                                   "Q&A with facilitators",
+                                   "Interactive group work",
+                                   "Slide presentation / theoretical material"
+                                 ].map(opt => {
+                                   const checked = mcqValuable.includes(opt);
+                                   return (
+                                     <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                                       <input 
+                                         type="checkbox" 
+                                         checked={checked}
+                                         onChange={() => {
+                                           if (checked) {
+                                             setMcqValuable(mcqValuable.filter(x => x !== opt));
+                                           } else {
+                                             setMcqValuable([...mcqValuable, opt]);
+                                           }
+                                         }}
+                                       />
+                                       {opt}
+                                     </label>
+                                   );
+                                 })}
+                               </div>
+                             </div>
+
+                             {/* MCQ: Pacing */}
+                             <div className="form-group" style={{ marginBottom: '12px' }}>
+                               <label className="form-label" style={{ display: 'block', marginBottom: '6px' }}>Session Pacing</label>
+                               <div style={{ display: 'flex', gap: '12px' }}>
+                                 {[
+                                   { label: "Too Slow", value: "too_slow" },
+                                   { label: "Just Right", value: "just_right" },
+                                   { label: "Too Fast", value: "too_fast" }
+                                 ].map(opt => (
+                                   <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                                     <input 
+                                       type="radio" 
+                                       name="mcqPacing" 
+                                       value={opt.value}
+                                       checked={mcqPacing === opt.value}
+                                       onChange={(e) => setMcqPacing(e.target.value)}
+                                       required
+                                     />
+                                     {opt.label}
+                                   </label>
+                                 ))}
+                               </div>
+                             </div>
+
+                             {/* MCQ: Would Recommend */}
+                             <div className="form-group" style={{ marginBottom: '12px' }}>
+                               <label className="form-label" style={{ display: 'block', marginBottom: '6px' }}>Would you recommend this workshop?</label>
+                               <div style={{ display: 'flex', gap: '12px' }}>
+                                 {[
+                                   { label: "Yes", value: "yes" },
+                                   { label: "Maybe", value: "maybe" },
+                                   { label: "No", value: "no" }
+                                 ].map(opt => (
+                                   <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                                     <input 
+                                       type="radio" 
+                                       name="mcqRecommend" 
+                                       value={opt.value}
+                                       checked={mcqRecommend === opt.value}
+                                       onChange={(e) => setMcqRecommend(e.target.value)}
+                                       required
+                                     />
+                                     {opt.label}
+                                   </label>
+                                 ))}
+                               </div>
+                             </div>
+
+                             <div className="form-group" style={{ marginBottom: '12px' }}>
+                               <label className="form-label">Comments (Qualitative feedback for AI analysis)</label>
+                               <textarea 
+                                 className="form-input"
+                                 style={{ minHeight: '60px', resize: 'vertical' }}
+                                 placeholder="What did you learn? How can we improve this cohort?"
+                                 value={feedbackComments}
+                                 onChange={(e) => setFeedbackComments(e.target.value)}
+                                 required
+                               />
+                             </div>
+                             <button type="submit" className="btn btn-accent" style={{ width: '100%' }}>
+                               Submit Feedback
+                             </button>
+                           </form>
+                         </div>
                       </div>
                     );
                   })()}
