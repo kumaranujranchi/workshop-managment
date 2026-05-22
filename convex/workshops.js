@@ -70,6 +70,8 @@ export const create = mutation({
     description: v.optional(v.string()),
     facilitatorId: v.string(),
     status: v.optional(v.string()), // 'draft' by default
+    dateTime: v.optional(v.string()),
+    capacity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -78,6 +80,8 @@ export const create = mutation({
       description: args.description,
       facilitatorId: args.facilitatorId,
       status: args.status || "draft",
+      dateTime: args.dateTime,
+      capacity: args.capacity ?? 20,
       createdAt: now,
       updatedAt: now,
     });
@@ -106,6 +110,8 @@ export const update = mutation({
     description: v.optional(v.string()),
     facilitatorId: v.optional(v.string()),
     status: v.optional(v.string()),
+    dateTime: v.optional(v.string()),
+    capacity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const wId = ctx.db.normalizeId("workshops", args.id);
@@ -131,6 +137,8 @@ export const update = mutation({
       }
       patchObj.status = args.status;
     }
+    if (args.dateTime !== undefined) patchObj.dateTime = args.dateTime;
+    if (args.capacity !== undefined) patchObj.capacity = args.capacity;
 
     await ctx.db.patch(wId, patchObj);
     const updated = await ctx.db.get(wId);

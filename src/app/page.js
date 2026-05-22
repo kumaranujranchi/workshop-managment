@@ -24,10 +24,15 @@ import {
   ClipboardList,
   AlertCircle,
   CheckSquare,
-  Activity
+  Activity,
+  Mail,
+  Layers3,
+  Eye,
+  Smile
 } from 'lucide-react';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
+import { analyzeExpectations } from '@/lib/nlp.js';
 
 const isConvexEnabled = !!process.env.NEXT_PUBLIC_CONVEX_URL;
 
@@ -66,6 +71,7 @@ function HomeConvex({
   const facilitators = useQuery(api.facilitators.list) || [];
   const recommendations = useQuery(api.agent.listRecommendations) || [];
   const participants = useQuery(api.participants.list, selectedWorkshopId ? { workshopId: selectedWorkshopId } : {}) || [];
+  const notifications = useQuery(api.participants.listNotifications) || [];
 
   // Auto-select first workshop if none selected
   useEffect(() => {
@@ -98,8 +104,8 @@ function HomeConvex({
   const updatePart = useMutation(api.participants.update);
   const createFeedback = useMutation(api.feedback.create);
 
-  const handleCreateWorkshop = async (title, description, facilitatorId) => {
-    return await createW({ title, description, facilitatorId });
+  const handleCreateWorkshop = async (title, description, facilitatorId, dateTime, capacity) => {
+    return await createW({ title, description, facilitatorId, dateTime, capacity: capacity !== undefined ? Number(capacity) : undefined });
   };
 
   const handleUpdateStatus = async (id, status) => {
@@ -110,12 +116,14 @@ function HomeConvex({
     return await createW({
       title: `${workshop.title} (Copy)`,
       description: workshop.description || '',
-      facilitatorId: workshop.facilitatorId
+      facilitatorId: workshop.facilitatorId,
+      dateTime: workshop.dateTime || '',
+      capacity: workshop.capacity !== undefined ? Number(workshop.capacity) : 20
     });
   };
 
-  const handleEditWorkshop = async (id, title, description, facilitatorId) => {
-    return await updateW({ id, title, description, facilitatorId });
+  const handleEditWorkshop = async (id, title, description, facilitatorId, dateTime, capacity) => {
+    return await updateW({ id, title, description, facilitatorId, dateTime, capacity: capacity !== undefined ? Number(capacity) : undefined });
   };
 
   const handleCreateFacilitator = async (name, email) => {
@@ -143,8 +151,8 @@ function HomeConvex({
     return await dismissAction({ id });
   };
 
-  const handleRegisterParticipant = async (name, email, workshopId) => {
-    return await createPart({ name, email, workshopId });
+  const handleRegisterParticipant = async (name, email, workshopId, expectations) => {
+    return await createPart({ name, email, workshopId, expectations: expectations || '' });
   };
 
   const handleAttendance = async (participantId, status) => {
@@ -166,6 +174,7 @@ function HomeConvex({
       facilitators={facilitators}
       recommendations={recommendations}
       participants={participants}
+      notifications={notifications}
       selectedWorkshopId={selectedWorkshopId}
       setSelectedWorkshopId={setSelectedWorkshopId}
       selectedParticipantId={selectedParticipantId}
@@ -198,6 +207,7 @@ function HomeREST({
   const [facilitators, setFacilitators] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
   const [participants, setParticipants] = useState([]);
+  const [notifications, setNotifications] = useState([]);
 
   // Fetch initial data
   const fetchData = async () => {
@@ -216,6 +226,10 @@ function HomeREST({
       const rRes = await fetch('/api/agent-recommendations');
       const rData = await rRes.json();
       setRecommendations(rData);
+
+      const nRes = await fetch('/api/notifications');
+      const nData = await nRes.json();
+      setNotifications(nData);
     } catch (err) {
       console.error('Error fetching data:', err);
     }
@@ -246,11 +260,11 @@ function HomeREST({
     }
   }, [selectedWorkshopId, workshops]);
 
-  const handleCreateWorkshop = async (title, description, facilitatorId) => {
+  const handleCreateWorkshop = async (title, description, facilitatorId, dateTime, capacity) => {
     const res = await fetch('/api/workshops', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, facilitatorId })
+      body: JSON.stringify({ title, description, facilitatorId, dateTime, capacity: capacity !== undefined ? Number(capacity) : undefined })
     });
     if (!res.ok) {
       const err = await res.json();
@@ -258,6 +272,7 @@ function HomeREST({
     }
     const newW = await res.json();
     setWorkshops([newW, ...workshops]);
+    fetchData(); // Sync notifications
     return newW;
   };
 
@@ -273,6 +288,7 @@ function HomeREST({
     }
     const updated = await res.json();
     setWorkshops(workshops.map(w => w.id === id ? { ...w, status: updated.status } : w));
+    fetchData(); // Sync notifications
     return updated;
   };
 
@@ -283,7 +299,9 @@ function HomeREST({
       body: JSON.stringify({
         title: `${workshop.title} (Copy)`,
         description: workshop.description,
-        facilitatorId: workshop.facilitatorId
+        facilitatorId: workshop.facilitatorId,
+        dateTime: workshop.dateTime || '',
+        capacity: workshop.capacity !== undefined ? Number(workshop.capacity) : 20
       })
     });
     if (!res.ok) {
@@ -292,14 +310,15 @@ function HomeREST({
     }
     const newW = await res.json();
     setWorkshops([newW, ...workshops]);
+    fetchData(); // Sync notifications
     return newW;
   };
 
-  const handleEditWorkshop = async (id, title, description, facilitatorId) => {
+  const handleEditWorkshop = async (id, title, description, facilitatorId, dateTime, capacity) => {
     const res = await fetch(`/api/workshops/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, facilitatorId })
+      body: JSON.stringify({ title, description, facilitatorId, dateTime, capacity: capacity !== undefined ? Number(capacity) : undefined })
     });
     if (!res.ok) {
       const err = await res.json();
@@ -307,6 +326,7 @@ function HomeREST({
     }
     const updated = await res.json();
     setWorkshops(workshops.map(w => w.id === id ? updated : w));
+    fetchData(); // Sync notifications
     return updated;
   };
 
@@ -361,6 +381,7 @@ function HomeREST({
     }
     const data = await res.json();
     setRecommendations(data.recommendations);
+    fetchData(); // Sync logs
     return data;
   };
 
@@ -395,11 +416,11 @@ function HomeREST({
     return { success: true };
   };
 
-  const handleRegisterParticipant = async (name, email, workshopId) => {
+  const handleRegisterParticipant = async (name, email, workshopId, expectations) => {
     const res = await fetch('/api/participants', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, workshopId })
+      body: JSON.stringify({ name, email, workshopId, expectations: expectations || '' })
     });
     if (!res.ok) {
       const err = await res.json();
@@ -460,6 +481,7 @@ function HomeREST({
       facilitators={facilitators}
       recommendations={recommendations}
       participants={participants}
+      notifications={notifications}
       selectedWorkshopId={selectedWorkshopId}
       setSelectedWorkshopId={setSelectedWorkshopId}
       selectedParticipantId={selectedParticipantId}
@@ -488,6 +510,7 @@ function Dashboard({
   facilitators,
   recommendations,
   participants,
+  notifications = [],
   selectedWorkshopId,
   setSelectedWorkshopId,
   selectedParticipantId,
@@ -516,6 +539,8 @@ function Dashboard({
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newFacilitatorId, setNewFacilitatorId] = useState('');
+  const [newDateTime, setNewDateTime] = useState('');
+  const [newCapacity, setNewCapacity] = useState(20);
 
   // Workshop edit states
   const [showEditModal, setShowEditModal] = useState(false);
@@ -523,6 +548,11 @@ function Dashboard({
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editFacilitatorId, setEditFacilitatorId] = useState('');
+  const [editDateTime, setEditDateTime] = useState('');
+  const [editCapacity, setEditCapacity] = useState(20);
+
+  // Participant expectations
+  const [regExpectations, setRegExpectations] = useState('');
 
   // HR Admin tabs
   const [adminTab, setAdminTab] = useState('workshops'); // 'workshops', 'facilitators'
@@ -572,10 +602,12 @@ function Dashboard({
     if (!newTitle.trim() || !newFacilitatorId) return;
 
     try {
-      await onCreateWorkshop(newTitle, newDescription, newFacilitatorId);
+      await onCreateWorkshop(newTitle, newDescription, newFacilitatorId, newDateTime, newCapacity);
       setShowCreateModal(false);
       setNewTitle('');
       setNewDescription('');
+      setNewDateTime('');
+      setNewCapacity(20);
       showAlert('Workshop created in Draft state!');
     } catch (err) {
       showAlert(err.message || 'Failed to create workshop', 'error');
@@ -605,6 +637,8 @@ function Dashboard({
     setEditTitle(workshop.title);
     setEditDescription(workshop.description || '');
     setEditFacilitatorId(workshop.facilitatorId);
+    setEditDateTime(workshop.dateTime || '');
+    setEditCapacity(workshop.capacity !== undefined ? workshop.capacity : 20);
     setShowEditModal(true);
   };
 
@@ -613,7 +647,7 @@ function Dashboard({
     if (!editTitle.trim() || !editFacilitatorId) return;
 
     try {
-      await onEditWorkshop(editWorkshopId, editTitle, editDescription, editFacilitatorId);
+      await onEditWorkshop(editWorkshopId, editTitle, editDescription, editFacilitatorId, editDateTime, editCapacity);
       setShowEditModal(false);
       showAlert('Workshop updated successfully!');
     } catch (err) {
@@ -703,10 +737,11 @@ function Dashboard({
     if (!regName.trim() || !regEmail.trim() || !selectedWorkshopId) return;
 
     try {
-      await onRegisterParticipant(regName, regEmail, selectedWorkshopId);
+      await onRegisterParticipant(regName, regEmail, selectedWorkshopId, regExpectations);
       showAlert('Successfully registered for the workshop!');
       setRegName('');
       setRegEmail('');
+      setRegExpectations('');
     } catch (err) {
       showAlert(err.message || 'Registration failed', 'error');
     }
@@ -856,6 +891,12 @@ function Dashboard({
                 >
                   Facilitators
                 </button>
+                <button 
+                  className={`tab-btn ${adminTab === 'sandbox' ? 'active' : ''}`}
+                  onClick={() => setAdminTab('sandbox')}
+                >
+                  System Integrations & Sandbox
+                </button>
               </div>
 
               {/* Workshops Tab */}
@@ -912,6 +953,26 @@ function Dashboard({
                             ))}
                           </select>
                         </div>
+                        <div className="form-group">
+                          <label className="form-label">Scheduled Date & Time</label>
+                          <input 
+                             type="text" 
+                             className="form-input" 
+                             value={newDateTime} 
+                             onChange={(e) => setNewDateTime(e.target.value)} 
+                             placeholder="e.g. June 15, 2026, 10:00 AM" 
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Capacity Limit</label>
+                          <input 
+                             type="number" 
+                             className="form-input" 
+                             value={newCapacity} 
+                             onChange={(e) => setNewCapacity(e.target.value)} 
+                             min="1"
+                          />
+                        </div>
                         <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '10px' }}>
                           <button type="button" onClick={() => setShowCreateModal(false)} className="btn btn-secondary">Cancel</button>
                           <button type="submit" className="btn btn-primary">Create Draft</button>
@@ -959,6 +1020,25 @@ function Dashboard({
                             ))}
                           </select>
                         </div>
+                        <div className="form-group">
+                          <label className="form-label">Scheduled Date & Time</label>
+                          <input 
+                             type="text" 
+                             className="form-input" 
+                             value={editDateTime} 
+                             onChange={(e) => setEditDateTime(e.target.value)} 
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Capacity Limit</label>
+                          <input 
+                             type="number" 
+                             className="form-input" 
+                             value={editCapacity} 
+                             onChange={(e) => setEditCapacity(e.target.value)} 
+                             min="1"
+                          />
+                        </div>
                         <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '10px' }}>
                           <button type="button" onClick={() => setShowEditModal(false)} className="btn btn-secondary">Cancel</button>
                           <button type="submit" className="btn btn-primary">Save Changes</button>
@@ -979,15 +1059,30 @@ function Dashboard({
                           <div style={{ flex: 1 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
                               <span className={`badge badge-${w.status}`}>{w.status.replace('_', ' ')}</span>
+                              {(() => {
+                                const cap = w.capacity || 20;
+                                const regCount = w.participantCount || 0;
+                                const left = cap - regCount;
+                                if (left <= 0) {
+                                  return <span className="badge" style={{ backgroundColor: 'hsl(var(--destructive) / 0.15)', color: 'hsl(var(--destructive))' }}>FULL - JOIN WAITLIST</span>;
+                                } else {
+                                  return <span className="badge" style={{ backgroundColor: 'hsl(var(--success) / 0.15)', color: 'hsl(var(--success))' }}>{left} / {cap} seats left</span>;
+                                }
+                              })()}
                               <span style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))' }}>ID: {w.id}</span>
                             </div>
                             <h3 style={{ fontSize: '1.25rem', marginBottom: '6px' }}>{w.title}</h3>
                             <p style={{ fontSize: '0.875rem', color: 'hsl(var(--muted))', marginBottom: '12px' }}>{w.description || 'No description provided.'}</p>
                             
-                            <div style={{ display: 'flex', gap: '24px', fontSize: '0.85rem', color: 'hsl(var(--foreground) / 0.8)', marginBottom: '12px' }}>
+                            <div style={{ display: 'flex', gap: '24px', fontSize: '0.85rem', color: 'hsl(var(--foreground) / 0.8)', marginBottom: '12px', flexWrap: 'wrap' }}>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <User size={14} style={{ color: 'hsl(var(--primary))' }} /> {w.facilitatorName}
                               </span>
+                              {w.dateTime && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <Calendar size={14} style={{ color: 'hsl(var(--accent))' }} /> {w.dateTime}
+                                </span>
+                              )}
                               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <Users size={14} style={{ color: 'hsl(var(--accent))' }} /> {w.participantCount} registered ({w.confirmedCount || 0} confirmed)
                               </span>
@@ -1112,6 +1207,81 @@ function Dashboard({
                         </div>
                       ))
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Sandbox Tab */}
+              {adminTab === 'sandbox' && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                    <div>
+                      <h2 style={{ fontSize: '1.75rem', fontWeight: 700 }}>System Integrations & Sandbox</h2>
+                      <p style={{ color: 'hsl(var(--muted))', fontSize: '0.9rem' }}>Monitor outbound communication, calendar invitations, and system-wide automated event flows.</p>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <h3 style={{ fontSize: '1.2rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Mail size={18} style={{ color: 'hsl(var(--primary))' }} /> Communication & Calendar Logs
+                    </h3>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      {notifications.length === 0 ? (
+                        <div style={{ padding: '40px', textAlign: 'center', color: 'hsl(var(--muted))', fontSize: '0.9rem' }}>
+                          No notifications or calendar events have been sent or simulated yet.
+                        </div>
+                      ) : (
+                        notifications.map(n => {
+                          const formatTime = (ts) => {
+                            if (!ts) return '';
+                            const date = new Date(ts);
+                            return isNaN(date.getTime()) ? String(ts) : date.toLocaleString();
+                          };
+                          return (
+                            <div key={n.id} style={{ padding: '16px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.01)', border: '1px solid hsl(var(--card-border))' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ 
+                                    backgroundColor: n.type === 'email' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(245, 158, 11, 0.15)', 
+                                    color: n.type === 'email' ? '#60a5fa' : '#fbbf24',
+                                    fontSize: '0.7rem',
+                                    padding: '2px 8px',
+                                    borderRadius: '12px',
+                                    fontWeight: 600,
+                                    textTransform: 'uppercase',
+                                    border: `1px solid ${n.type === 'email' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                                  }}>
+                                    {n.type === 'email' ? 'Gmail Simulation' : 'Google Calendar Invite'}
+                                  </span>
+                                  <span className={`badge badge-${n.status}`}>{n.status}</span>
+                                </div>
+                                <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))' }}>{formatTime(n.createdAt)}</span>
+                              </div>
+                              <div style={{ marginBottom: '8px', fontSize: '0.85rem' }}>
+                                <strong>Recipient:</strong> <span style={{ color: 'hsl(var(--primary))' }}>{n.recipient}</span>
+                              </div>
+                              <div style={{ marginBottom: '12px', fontSize: '0.9rem', fontWeight: 600 }}>
+                                <strong>Subject:</strong> {n.subject}
+                              </div>
+                              <div style={{ 
+                                padding: '12px', 
+                                borderRadius: 'var(--radius-sm)', 
+                                background: 'rgba(0,0,0,0.2)', 
+                                border: '1px solid hsl(var(--card-border))',
+                                fontSize: '0.8rem',
+                                fontFamily: 'monospace',
+                                whiteSpace: 'pre-wrap',
+                                lineHeight: '1.4',
+                                color: 'hsl(var(--foreground) / 0.85)'
+                              }}>
+                                {n.body}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -1253,45 +1423,217 @@ function Dashboard({
 
             {selectedWorkshopId ? (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
-                {/* Onboarding & Attendance Checks */}
-                <div className="card">
-                  <h3 style={{ fontSize: '1.2rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Users size={18} style={{ color: 'hsl(var(--primary))' }} /> Onboarding & Attendance Checks
-                  </h3>
+                {/* Left Column Stack */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+                  {/* Onboarding & Attendance Checks */}
+                  <div className="card">
+                    <h3 style={{ fontSize: '1.2rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Users size={18} style={{ color: 'hsl(var(--primary))' }} /> Onboarding & Attendance Checks
+                    </h3>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {participants.length === 0 ? (
-                      <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--muted))' }}>
-                        No participants registered for this workshop yet.
-                      </div>
-                    ) : (
-                      participants.map(p => (
-                        <div key={p.id} style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.01)', border: '1px solid hsl(var(--card-border))', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div>
-                            <h4 style={{ fontSize: '0.95rem', fontWeight: 600 }}>{p.name}</h4>
-                            <span style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))' }}>{p.email}</span>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem' }}>
-                            <div>
-                              <span style={{ color: 'hsl(var(--muted))', display: 'block', fontSize: '0.7rem' }}>Attendance</span>
-                              <span style={{ 
-                                fontWeight: 600, 
-                                color: p.status === 'confirmed' ? 'hsl(var(--success))' : p.status === 'declined' ? 'hsl(var(--destructive))' : 'hsl(var(--warning))'
-                              }}>{p.status}</span>
-                            </div>
-                            <div>
-                              <span style={{ color: 'hsl(var(--muted))', display: 'block', fontSize: '0.7rem' }}>Onboarding</span>
-                              <span style={{ 
-                                fontWeight: 600, 
-                                color: p.onboardingStatus === 'completed' ? 'hsl(var(--primary))' : 'hsl(var(--muted))'
-                              }}>{p.onboardingStatus}</span>
-                            </div>
-                          </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {participants.length === 0 ? (
+                        <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--muted))' }}>
+                          No participants registered for this workshop yet.
                         </div>
-                      ))
-                    )}
+                      ) : (
+                        participants.map(p => (
+                          <div key={p.id} style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.01)', border: '1px solid hsl(var(--card-border))', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <h4 style={{ fontSize: '0.95rem', fontWeight: 600 }}>{p.name}</h4>
+                              <span style={{ fontSize: '0.8rem', color: 'hsl(var(--muted))' }}>{p.email}</span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem' }}>
+                              <div>
+                                <span style={{ color: 'hsl(var(--muted))', display: 'block', fontSize: '0.7rem' }}>Attendance</span>
+                                <span style={{ 
+                                  fontWeight: 600, 
+                                  color: p.status === 'confirmed' ? 'hsl(var(--success))' : p.status === 'declined' ? 'hsl(var(--destructive))' : 'hsl(var(--warning))'
+                                }}>{p.status}</span>
+                              </div>
+                              <div>
+                                <span style={{ color: 'hsl(var(--muted))', display: 'block', fontSize: '0.7rem' }}>Onboarding</span>
+                                <span style={{ 
+                                  fontWeight: 600, 
+                                  color: p.onboardingStatus === 'completed' ? 'hsl(var(--primary))' : 'hsl(var(--muted))'
+                                }}>{p.onboardingStatus}</span>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
+
+                  {/* Pre-Workshop NLP Intelligence Card */}
+                  {(() => {
+                    const expectationsList = participants.map(p => p.expectations).filter(Boolean);
+                    const nlpData = analyzeExpectations(expectationsList);
+                    return (
+                      <div className="card">
+                        <h3 style={{ fontSize: '1.2rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Sparkles size={18} style={{ color: 'hsl(var(--primary))' }} /> Pre-Workshop NLP Intelligence
+                        </h3>
+
+                        {nlpData.sampleCount === 0 ? (
+                          <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--muted))', fontSize: '0.85rem' }}>
+                            No expectations captured from participants yet.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            {/* AI Summary Box */}
+                            <div style={{ 
+                              padding: '16px', 
+                              borderRadius: 'var(--radius-md)', 
+                              background: 'linear-gradient(135deg, hsl(var(--primary) / 0.1) 0%, hsl(var(--accent) / 0.1) 100%)',
+                              border: '1px solid hsl(var(--primary) / 0.15)',
+                              fontSize: '0.9rem',
+                              lineHeight: '1.5',
+                              color: 'hsl(var(--foreground))'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', fontWeight: 600, color: 'hsl(var(--primary))' }}>
+                                <Sparkles size={14} /> AI Insight Summary
+                              </div>
+                              <p style={{ margin: 0, fontStyle: 'italic' }}>"{nlpData.summary}"</p>
+                            </div>
+
+                            {/* Sentiment Cluster Bar Chart */}
+                            <div>
+                              <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', display: 'block', marginBottom: '8px', fontWeight: 600 }}>Cohort Sentiment Cluster</span>
+                              <div style={{ height: '24px', display: 'flex', borderRadius: 'var(--radius-sm)', overflow: 'hidden', background: 'hsl(var(--secondary))', marginBottom: '12px' }}>
+                                {nlpData.sentiment.positive > 0 && (
+                                  <div style={{ 
+                                    width: `${nlpData.sentiment.positive}%`, 
+                                    backgroundColor: '#10b981', // green
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: '#fff',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all var(--transition-normal)'
+                                  }} title={`Positive: ${nlpData.sentiment.positive}%`}>
+                                    {nlpData.sentiment.positive >= 10 ? `${nlpData.sentiment.positive}%` : ''}
+                                  </div>
+                                )}
+                                {nlpData.sentiment.curious > 0 && (
+                                  <div style={{ 
+                                    width: `${nlpData.sentiment.curious}%`, 
+                                    backgroundColor: '#3b82f6', // blue
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: '#fff',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all var(--transition-normal)'
+                                  }} title={`Curious: ${nlpData.sentiment.curious}%`}>
+                                    {nlpData.sentiment.curious >= 10 ? `${nlpData.sentiment.curious}%` : ''}
+                                  </div>
+                                )}
+                                {nlpData.sentiment.concerned > 0 && (
+                                  <div style={{ 
+                                    width: `${nlpData.sentiment.concerned}%`, 
+                                    backgroundColor: '#f59e0b', // orange
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: '#fff',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all var(--transition-normal)'
+                                  }} title={`Concerned: ${nlpData.sentiment.concerned}%`}>
+                                    {nlpData.sentiment.concerned >= 10 ? `${nlpData.sentiment.concerned}%` : ''}
+                                  </div>
+                                )}
+                                {nlpData.sentiment.neutral > 0 && (
+                                  <div style={{ 
+                                    width: `${nlpData.sentiment.neutral}%`, 
+                                    backgroundColor: '#6b7280', // gray
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: '#fff',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all var(--transition-normal)'
+                                  }} title={`Neutral: ${nlpData.sentiment.neutral}%`}>
+                                    {nlpData.sentiment.neutral >= 10 ? `${nlpData.sentiment.neutral}%` : ''}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Legend */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '0.75rem', flexWrap: 'wrap' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981' }} /> Positive ({nlpData.sentiment.positive}%)
+                                </span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#3b82f6' }} /> Curious ({nlpData.sentiment.curious}%)
+                                </span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#f59e0b' }} /> Concerned ({nlpData.sentiment.concerned}%)
+                                </span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#6b7280' }} /> Neutral ({nlpData.sentiment.neutral}%)
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Themes Tag Cloud */}
+                            <div>
+                              <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', display: 'block', marginBottom: '8px', fontWeight: 600 }}>Extracted Learning Themes</span>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                {nlpData.themes.map((theme, idx) => (
+                                  <div key={idx} className="glass" style={{ 
+                                    padding: '6px 12px', 
+                                    borderRadius: '20px', 
+                                    fontSize: '0.8rem', 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    gap: '6px',
+                                    border: '1px solid hsl(var(--card-border))',
+                                    background: 'rgba(255,255,255,0.02)'
+                                  }}>
+                                    <span>{theme.name}</span>
+                                    <span style={{ 
+                                      fontSize: '0.7rem', 
+                                      backgroundColor: 'hsl(var(--primary) / 0.15)', 
+                                      color: 'hsl(var(--primary))', 
+                                      padding: '1px 6px', 
+                                      borderRadius: '10px',
+                                      fontWeight: 600
+                                    }}>{theme.percentage}%</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Expectations List */}
+                            <div>
+                              <span style={{ fontSize: '0.75rem', color: 'hsl(var(--muted))', textTransform: 'uppercase', display: 'block', marginBottom: '8px', fontWeight: 600 }}>Raw Responses ({nlpData.sampleCount})</span>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '150px', overflowY: 'auto' }}>
+                                {participants.filter(p => p.expectations).map(p => (
+                                  <div key={p.id} style={{ 
+                                    padding: '8px 12px', 
+                                    borderRadius: 'var(--radius-sm)', 
+                                    background: 'rgba(255,255,255,0.01)', 
+                                    border: '1px solid hsl(var(--card-border))', 
+                                    fontSize: '0.75rem',
+                                    lineHeight: '1.4'
+                                  }}>
+                                    <div style={{ fontWeight: 600, color: 'hsl(var(--muted))', marginBottom: '2px' }}>{p.name}:</div>
+                                    <div>"{p.expectations}"</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Right Column Stack */}
@@ -1494,9 +1836,14 @@ function Dashboard({
                   value={selectedWorkshopId} 
                   onChange={(e) => setSelectedWorkshopId(e.target.value)}
                 >
-                  {workshops.filter(w => w.status === 'published' || w.status === 'registration_closed').map(w => (
-                    <option key={w.id} value={w.id}>{w.title} ({w.status.replace('_', ' ')})</option>
-                  ))}
+                  {workshops.filter(w => w.status === 'published' || w.status === 'registration_closed').map(w => {
+                    const cap = w.capacity || 20;
+                    const left = cap - (w.participantCount || 0);
+                    const capLabel = left <= 0 ? ' (FULL - JOIN WAITLIST)' : ` (${left}/${cap} seats left)`;
+                    return (
+                      <option key={w.id} value={w.id}>{w.title} - {w.status.replace('_', ' ')}{capLabel}</option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -1524,6 +1871,16 @@ function Dashboard({
                       value={regEmail}
                       onChange={(e) => setRegEmail(e.target.value)}
                       required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Learning Expectations (Free Text)</label>
+                    <textarea 
+                      className="form-input" 
+                      style={{ minHeight: '80px', resize: 'vertical' }}
+                      placeholder="What do you expect to learn from this workshop?"
+                      value={regExpectations}
+                      onChange={(e) => setRegExpectations(e.target.value)}
                     />
                   </div>
                   <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>

@@ -6,7 +6,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { title, description, status, facilitatorId } = body;
+    const { title, description, status, facilitatorId, dateTime, capacity } = body;
 
     if (isConvexEnabled) {
       try {
@@ -16,6 +16,8 @@ export async function PUT(request, { params }) {
           description,
           status,
           facilitatorId,
+          dateTime: dateTime !== undefined ? dateTime : undefined,
+          capacity: capacity !== undefined ? Number(capacity) : undefined,
         });
         return NextResponse.json(updatedWorkshop);
       } catch (err) {
@@ -37,12 +39,14 @@ export async function PUT(request, { params }) {
     const updatedDescription = description !== undefined ? description : workshop.description;
     const updatedStatus = status !== undefined ? status : workshop.status;
     const updatedFacilitatorId = facilitatorId !== undefined ? facilitatorId : workshop.facilitatorId;
+    const updatedDateTime = dateTime !== undefined ? dateTime : workshop.dateTime;
+    const updatedCapacity = capacity !== undefined ? Number(capacity) : workshop.capacity;
 
     db.prepare(`
       UPDATE workshops 
-      SET title = ?, description = ?, status = ?, facilitatorId = ?, updatedAt = CURRENT_TIMESTAMP
+      SET title = ?, description = ?, status = ?, facilitatorId = ?, dateTime = ?, capacity = ?, updatedAt = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(updatedTitle, updatedDescription, updatedStatus, updatedFacilitatorId, id);
+    `).run(updatedTitle, updatedDescription, updatedStatus, updatedFacilitatorId, updatedDateTime, updatedCapacity, id);
 
     const updatedWorkshop = db.prepare(`
       SELECT w.*, f.name as facilitatorName 

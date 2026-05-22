@@ -36,7 +36,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { title, description, facilitatorId } = body;
+    const { title, description, facilitatorId, dateTime, capacity } = body;
 
     if (!title || !facilitatorId) {
       return NextResponse.json({ error: 'Title and Facilitator are required' }, { status: 400 });
@@ -47,17 +47,20 @@ export async function POST(request) {
         title,
         description: description || '',
         facilitatorId,
+        dateTime: dateTime || undefined,
+        capacity: capacity !== undefined ? Number(capacity) : undefined,
       });
       return NextResponse.json(newWorkshop, { status: 201 });
     }
 
     const id = generateId();
     const status = 'draft';
+    const finalCapacity = capacity !== undefined ? Number(capacity) : 20;
 
     db.prepare(`
-      INSERT INTO workshops (id, title, description, facilitatorId, status)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, title, description || '', facilitatorId, status);
+      INSERT INTO workshops (id, title, description, facilitatorId, status, dateTime, capacity)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, title, description || '', facilitatorId, status, dateTime || null, finalCapacity);
 
     const newWorkshop = db.prepare(`
       SELECT w.*, f.name as facilitatorName 

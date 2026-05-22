@@ -12,6 +12,8 @@ export default defineSchema({
     description: v.optional(v.string()),
     facilitatorId: v.string(),
     status: v.string(), // 'draft', 'published', 'registration_closed', 'completed', 'archived'
+    dateTime: v.optional(v.string()),
+    capacity: v.optional(v.number()),
     createdAt: v.optional(v.number()),
     updatedAt: v.optional(v.number()),
   }),
@@ -20,8 +22,9 @@ export default defineSchema({
     name: v.string(),
     email: v.string(),
     workshopId: v.string(),
-    status: v.string(), // 'registered', 'confirmed', 'declined'
+    status: v.string(), // 'registered', 'confirmed', 'declined', 'waitlisted'
     onboardingStatus: v.string(), // 'pending', 'completed'
+    expectations: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   }).index("by_workshopId", ["workshopId"]),
 
@@ -41,5 +44,14 @@ export default defineSchema({
     recommendedAction: v.string(),
     status: v.string(), // 'proposed', 'approved', 'dismissed', 'executed', 'failed'
     createdAt: v.optional(v.number()),
+  }),
+
+  notifications: defineTable({
+    type: v.string(), // 'email', 'calendar'
+    recipient: v.string(),
+    subject: v.string(),
+    body: v.string(),
+    status: v.string(), // 'sent', 'revoked', 'failed'
+    createdAt: v.number(),
   }),
 });

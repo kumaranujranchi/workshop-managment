@@ -20,6 +20,45 @@ try {
   }
 }
 
+// Run workshop table alterations
+try {
+  rawDb.exec("ALTER TABLE workshops ADD COLUMN dateTime TEXT;");
+} catch (err) {
+  // Ignored if column already exists
+}
+try {
+  rawDb.exec("ALTER TABLE workshops ADD COLUMN capacity INTEGER DEFAULT 20;");
+} catch (err) {
+  // Ignored if column already exists
+}
+
+// Run participant table alterations
+try {
+  rawDb.exec("ALTER TABLE participants ADD COLUMN expectations TEXT;");
+} catch (err) {
+  // Ignored if column already exists
+}
+
+// Recreate participants to support 'waitlisted' check constraint
+let needsParticipantsRecreate = false;
+try {
+  rawDb.exec("INSERT INTO participants (id, name, email, workshopId, status, onboardingStatus) VALUES ('temp_waitlist_mig', 'test', 'test', 'non_existent_ws', 'waitlisted', 'pending')");
+  rawDb.exec("DELETE FROM participants WHERE id = 'temp_waitlist_mig'");
+} catch (err) {
+  if (err.message && err.message.includes('CHECK constraint failed')) {
+    needsParticipantsRecreate = true;
+  }
+}
+
+if (needsParticipantsRecreate) {
+  console.log('[Database] Recreating participants table to support waitlisted status...');
+  try {
+    rawDb.exec("ALTER TABLE participants RENAME TO participants_old;");
+  } catch (err) {
+    console.error('Failed to rename participants table:', err);
+  }
+}
+
 // Initialize database schema
 rawDb.exec(`
   CREATE TABLE IF NOT EXISTS facilitators (
@@ -34,6 +73,8 @@ rawDb.exec(`
     description TEXT,
     facilitatorId TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('draft', 'published', 'registration_closed', 'completed', 'archived')),
+    dateTime TEXT,
+    capacity INTEGER DEFAULT 20,
     createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
     updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(facilitatorId) REFERENCES facilitators(id)
@@ -44,8 +85,9 @@ rawDb.exec(`
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     workshopId TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('registered', 'confirmed', 'declined')),
+    status TEXT NOT NULL CHECK(status IN ('registered', 'confirmed', 'declined', 'waitlisted')),
     onboardingStatus TEXT NOT NULL CHECK(onboardingStatus IN ('pending', 'completed')),
+    expectations TEXT,
     createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(workshopId) REFERENCES workshops(id)
   );
@@ -71,7 +113,31 @@ rawDb.exec(`
     status TEXT NOT NULL CHECK(status IN ('proposed', 'approved', 'dismissed', 'executed', 'failed')),
     createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK(type IN ('email', 'calendar')),
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('sent', 'revoked', 'failed')),
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+if (needsParticipantsRecreate) {
+  try {
+    rawDb.exec(`
+      INSERT INTO participants (id, name, email, workshopId, status, onboardingStatus, expectations, createdAt)
+      SELECT id, name, email, workshopId, status, onboardingStatus, expectations, createdAt
+      FROM participants_old;
+    `);
+    rawDb.exec("DROP TABLE participants_old;");
+    console.log('[Database] Participants table successfully migrated.');
+  } catch (err) {
+    console.error('Failed to migrate participants data:', err);
+  }
+}
 
 // Wrapper helper to mimic better-sqlite3 API
 const db = {

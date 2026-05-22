@@ -34,10 +34,10 @@ export async function GET(request) {
   }
 }
 
-export async function POST(request) {
+export const POST = async (request) => {
   try {
     const body = await request.json();
-    const { name, email, workshopId } = body;
+    const { name, email, workshopId, expectations } = body;
 
     if (!name || !email || !workshopId) {
       return NextResponse.json({ error: 'Name, email, and workshopId are required' }, { status: 400 });
@@ -56,6 +56,7 @@ export async function POST(request) {
         name,
         email,
         workshopId,
+        expectations: expectations || '',
       });
       return NextResponse.json(newParticipant, { status: 201 });
     }
@@ -69,15 +70,60 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Workshop is not open for registration' }, { status: 400 });
     }
 
+    // SQLite Capacity checking logic
+    const capacity = workshop.capacity ?? 20;
+    const activeCountRow = db.prepare(`
+      SELECT COUNT(*) as activeCount 
+      FROM participants 
+      WHERE workshopId = ? AND status != 'declined' AND status != 'waitlisted'
+    `).get(workshopId);
+    const activeCount = activeCountRow ? activeCountRow.activeCount : 0;
+
+    let finalStatus = 'registered';
+    if (activeCount >= capacity) {
+      finalStatus = 'waitlisted';
+    }
+
     const id = generateId();
-    // Default values
-    const status = 'registered';
     const onboardingStatus = 'pending';
 
     db.prepare(`
-      INSERT INTO participants (id, name, email, workshopId, status, onboardingStatus)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, name, email, workshopId, status, onboardingStatus);
+      INSERT INTO participants (id, name, email, workshopId, status, onboardingStatus, expectations)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, name, email, workshopId, finalStatus, onboardingStatus, expectations || '');
+
+    // SQLite Notification logging logic
+    if (finalStatus === 'waitlisted') {
+      db.prepare(`
+        INSERT INTO notifications (id, type, recipient, subject, body, status)
+        VALUES (?, 'email', ?, ?, ?, 'sent')
+      `).run(
+        generateId(),
+        email,
+        `Waitlisted: ${workshop.title}`,
+        `Hi ${name},\n\nThe workshop "${workshop.title}" is currently at full capacity. You have been added to the waitlist. We will notify you if a seat becomes available.`
+      );
+    } else {
+      db.prepare(`
+        INSERT INTO notifications (id, type, recipient, subject, body, status)
+        VALUES (?, 'email', ?, ?, ?, 'sent')
+      `).run(
+        generateId(),
+        email,
+        `Registration Confirmed: ${workshop.title}`,
+        `Hi ${name},\n\nYou are successfully registered for the workshop "${workshop.title}".\nDate/Time: ${workshop.dateTime || 'TBD'}\n\nWe look forward to seeing you!`
+      );
+
+      db.prepare(`
+        INSERT INTO notifications (id, type, recipient, subject, body, status)
+        VALUES (?, 'calendar', ?, ?, ?, 'sent')
+      `).run(
+        generateId(),
+        email,
+        `Calendar Invitation: ${workshop.title}`,
+        `Event: ${workshop.title}\nDate/Time: ${workshop.dateTime || 'TBD'}\nLocation: Zoom / Online Meeting Link`
+      );
+    }
 
     const newParticipant = db.prepare('SELECT * FROM participants WHERE id = ?').get(id);
     return NextResponse.json(newParticipant, { status: 201 });
@@ -85,4 +131,4 @@ export async function POST(request) {
     console.error('Error creating participant:', error);
     return NextResponse.json({ error: 'Failed to register participant' }, { status: 500 });
   }
-}
+};
